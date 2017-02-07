@@ -1,0 +1,47 @@
+conky.config = {
+	alignment = 'top_middle',
+
+	cpu_avg_samples = 1,
+	net_avg_samples = 1,
+	update_interval = 1,
+	
+	default_color = 'white',
+	default_outline_color = 'white',
+	default_shade_color = 'white',
+	color2 = 'gray50',
+	color3= 'yellow',
+	color4='lightgreen',
+	
+	use_xft = true,
+	font = 'DejaVu Sans Mono:size=9',
+
+	draw_borders = false,
+	draw_shades = false,
+	draw_graph_borders = false,
+	draw_outline = false,
+
+	border_width = 0,
+
+	gap_x = 0,
+	gap_y = 0,
+
+	own_window = true,
+	own_window_type = 'dock',
+	own_window_transparent = true,
+	own_window_hints = 'undecorated,below,sticky,skip_taskbar,skip_pager',
+	own_window_argb_visual = true,
+
+	use_spacer = 'left',
+	double_buffer = true,
+	no_buffers = false,
+
+	total_run_times = 0,
+	background = true,
+
+	mpd_port = 6601,
+	
+	lua_load = '~/.conky/draw_bg.lua',
+	lua_draw_hook_pre = 'draw_bg',
+}
+
+conky.text = [[${execi 30 ~/.conky/ConkyScript.py --createchecks}${if_match "${exec (~/.conky/ConkyScript.py --showchecks updates)}" != "0"}${color2}updates: ${execp ~/.conky/ConkyScript.py --showchecks updates} ${endif}${if_match ${exec (~/.conky/ConkyScript.py --showchecks cache)} > 300}${color2}cache: ${color3}${execp ~/.conky/ConkyScript.py --showchecks cache} ${endif}${color2}wifi:${color} ${execpi 3 ~/.conky/ConkyScript.py --ping} ${color2}root: ${color}${fs_free /} ${color2}data:${color}${fs_free /media/Data/Stored}${if_match "${execi 2 (~/.conky/ConkyScript.py --timer get)}" != ""}${color2} timer: ${color}${execp ~/.conky/ConkyScript.py --timer get}${endif}${if_running qbittorrent}${color2} qbittorrent: ${color}${execi 3 ~/.conky/ConkyScript.py --qbittorrent}${endif}${color2}${if_match "${execi 5 ~/.conky/ConkyScript.py --services}" != ""} services: ${color}${execpi 5 ~/.conky/ConkyScript.py --services}${endif}${if_running clementine}${color2} clementine: ${color4}${scroll 25 3 ${execi 5 qdbus org.mpris.clementine /Player org.freedesktop.MediaPlayer.GetMetadata | grep -e "^title:" -e "^artist:" | sed -e '1s/$/ \-/' | cut -d " " -f2- | paste -d " " - -}}${endif}${if_running mpd}${if_mpd_playing}${color2} mpd: ${color4}${scroll 25 ${mpd_smart}}${endif}${endif}${if_running twitchy}${color2} twitchy: ${color}${exec /usr/bin/twitchy --conky}${endif}]]
