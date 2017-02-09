@@ -203,18 +203,26 @@ def qbittorrent():
 	return total_active, total_all, first_torrent_eta, round(total_progress_percentage, 2)
 
 
-class CalendarStuff:
+class Calendar:
 	def __init__(self):
 		pass
 
-	def calendar_show(self, interval):
-		pyCalendar.calendar_show(interval)  # Interval should be passed as a string
+	def calendar_show(self):
+		# The pyCalendar module displays events in a tabulated manner for
+		# any integer interval passed as a string.
+		# The following string argument just shows today's events as csv
+		_today = pyCalendar.calendar_show('BlankForAllIntensivePurposes')
+		if _today:
+			print(_today)
 
 	def calendar_add(self):
 		pyCalendar.calendar_add()
 
 	def calendar_seen(self):
 		pyCalendar.calendar_seen()
+
+	def parse_ics(self, ics_file):
+		pyCalendar.parse_ics(ics_file)
 
 
 class Timer:
@@ -258,14 +266,14 @@ def main():
 	parser.add_argument('--pacmancache', action='store_true', help='Pacman redundant cache')
 	parser.add_argument('--qbittorrent', action='store_true', help='Qbittorrent status')
 	parser.add_argument('--ping', action='store_true', help='Ping status to specificed server')
-	parser.add_argument('--timer', nargs='+', help='Timer functions (set requires an argument)', metavar='set <time> / reset / get')
+	parser.add_argument('--calendar', nargs=1, help='Calendar functions', metavar='[show / add / seen / parse-ics <file>]')
+	parser.add_argument('--timer', nargs=1, help='Timer functions (set requires an argument)', metavar='[set <time> / reset / get]')
 	parser.add_argument('--services', action='store_true', help='Service status')
 	parser.add_argument('--createchecks', action='store_true', help='Create database entries')
-	parser.add_argument('--showchecks', nargs='+', help='Create database entries', metavar='updates / cache')
+	parser.add_argument('--showchecks', nargs=1, help='Display database entries created by --createchecks', metavar='[updates / cache]')
 
 	args = parser.parse_args()
 
-	# calendar functions still remain
 	if args.pacman:
 		print(Options.conky_color_yellow + str(pending_updates()))
 
@@ -292,6 +300,19 @@ def main():
 		else:
 			print(ping_output[0])
 
+	elif args.calendar:
+		mycalendar = Calendar()
+		if args.calendar[0] == 'show':
+			mycalendar.calendar_show()
+
+			# All of the following are interactive
+		elif args.calendar[0] == 'add':
+			mycalendar.calendar_add()
+		elif args.calendar[0] == 'seen':
+			mycalendar.calendar_seen()
+		elif args.calendar[0] == 'parse-ics':
+			mycalendar.parse_ics(args.calendar[1])
+
 	elif args.services:
 		print(service_status())
 
@@ -311,7 +332,7 @@ def main():
 			if output is not None:
 				print(output)
 
-		""" The following helps with decreasing resource utilization.
+		""" The following arguments hopefully decrease resource utilization.
 		Instead of calling the relevant functions directly, it's a
 		little better to just write the values to the database every
 		few minutes and then check that instead """
