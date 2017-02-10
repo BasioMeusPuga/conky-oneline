@@ -10,6 +10,7 @@ import argparse
 import datetime
 import subprocess
 import pyCalendar
+import collections
 
 
 database_path = os.path.dirname(os.path.realpath(__file__)) + '/conky.db'
@@ -30,6 +31,7 @@ class Options:
 	interface_name = 'tplink1'  # Wifi interface name
 	ping_address = '8.8.8.8'
 	tolerable_extra_cache = 300  # MiB
+	show_cpu_over = 50  # Percentage CPU utilization (per core?)
 	qbittorrent_port = 9390
 
 
@@ -74,8 +76,8 @@ def pacman_extra_cache():
 
 	duplicates = [packages[package] for package in packages.keys() if len(packages[package]) > 1]
 
-	# The preceding code looks for a hyphen followed by a number to decide what the package name is.
-	# That's clearly an affront to humanity. So:
+	""" The preceding code looks for a hyphen followed by a number to decide what the package name is.
+	That's clearly an affront to humanity. So: """
 	exceptions = ['ntfs']
 
 	cached_not_installed = set(packages.keys()) - set(all_installed) - set(aur_installed)
@@ -203,14 +205,39 @@ def qbittorrent():
 	return total_active, total_all, first_torrent_eta, round(total_progress_percentage, 2)
 
 
+def cpu_top():
+	""" Show CPU utilization for a process/processes exceeding Options.show_cpu_over
+	Return None if no processes meet that criteria
+	Processes with the same name are grouped together """
+
+	args_to_subprocess = shlex.split('ps -eo pcpu,comm --sort=-%cpu --no-header')
+	myProcess = subprocess.run(args_to_subprocess, stderr=subprocess.DEVNULL, stdout=subprocess.PIPE)
+	myProcess_out = myProcess.stdout.decode().split()
+
+	cpu_util = {}
+	for i in range(1, len(myProcess_out), 2):
+		if myProcess_out[i] in cpu_util.keys():
+			cpu_util[myProcess_out[i]] = round(cpu_util[myProcess_out[i]] + float(myProcess_out[i - 1]))
+		else:
+			cpu_util[myProcess_out[i]] = float(myProcess_out[i - 1])
+
+	cpu_util = {k: v for k, v in cpu_util.items() if v > Options.show_cpu_over and k != 'Main'}
+	cpu_util = collections.OrderedDict(sorted(cpu_util.items(), key=lambda x: x[1], reverse=True))
+
+	if cpu_util:
+		print(', '.join(cpu_util.keys()))
+	else:
+		return None
+
+
 class Calendar:
 	def __init__(self):
 		pass
 
 	def calendar_show(self):
-		# The pyCalendar module displays events in a tabulated manner for
-		# any integer interval passed as a string.
-		# The following string argument just shows today's events as csv
+		""" The pyCalendar module displays events in a tabulated manner for
+		any integer interval passed as a string.
+		The following string argument just shows today's events as csv """
 		_today = pyCalendar.calendar_show('BlankForAllIntensivePurposes')
 		if _today:
 			print(_today)
@@ -270,6 +297,7 @@ def main():
 	parser.add_argument('--timer', nargs=1, help='Timer functions (set requires an argument)', metavar='[set <time> / reset / get]')
 	parser.add_argument('--services', action='store_true', help='Service status')
 	parser.add_argument('--createchecks', action='store_true', help='Create database entries')
+	parser.add_argument('--top', action='store_true', help='Show processes that exceed specified CPU utilization')
 	parser.add_argument('--showchecks', nargs=1, help='Display database entries created by --createchecks', metavar='[updates / cache]')
 
 	args = parser.parse_args()
@@ -315,6 +343,9 @@ def main():
 
 	elif args.services:
 		print(service_status())
+
+	elif args.top:
+		cpu_top()
 
 	elif args.timer:
 		mytimer = Timer()
