@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import os
+import re
 import time
 import shlex
 import random
@@ -31,8 +32,19 @@ class Options:
 	interface_name = 'tplink1'  # Wifi interface name
 	ping_address = '8.8.8.8'
 	tolerable_extra_cache = 300  # MiB
-	show_cpu_over = 50  # Percentage CPU utilization (per core?)
+	show_cpu_over = 50  # Percentage CPU utilization (sum of all cores?)
 	qbittorrent_port = 9390
+
+	""" 1st element of list:
+	False if notification has to happen in the OFF state
+	True if notification has to happen in the ON state
+	2nd element of list:
+	Preferred sexy name """
+	check_services = {
+		'ufw': [False, 'Firewall'],
+		'emby-server': [True, 'Emby'],
+		'org.cups.cupsd': [True, None],
+		'sshd': [False, None]}
 
 
 def format_time(time_in_seconds):
@@ -66,24 +78,18 @@ def pacman_extra_cache():
 
 	pacman_cache = os.listdir('/var/cache/pacman/pkg')
 	for i in pacman_cache:
-		for j in range(len(i)):
-			if i[j] == '-' and i[j + 1].isdigit() is True:
-				try:
-					packages[i[:j]].append(i)
-				except:
-					packages[i[:j]] = [i]
-				break
+		_regex_match = re.search(r"^(.+?)-\d{1,}\.", i)
+		if _regex_match:
+			try:
+				packages[_regex_match.group(1)].append(i)
+			except:
+				packages[_regex_match.group(1)] = [i]
 
 	duplicates = [packages[package] for package in packages.keys() if len(packages[package]) > 1]
 
-	""" The preceding code looks for a hyphen followed by a number to decide what the package name is.
-	That's clearly an affront to humanity. So: """
-	exceptions = ['ntfs']
-
 	cached_not_installed = set(packages.keys()) - set(all_installed) - set(aur_installed)
 	for l in cached_not_installed:
-		if l not in exceptions:  # Calculated later so that extra cached packages are still included in the duplicate list
-			duplicates.append(packages[l])
+		duplicates.append(packages[l])
 
 	""" This approximates file sizes but the
 	code for version number comparison is well
@@ -97,8 +103,11 @@ def pacman_extra_cache():
 			total_extra = total_extra + package_size_lel
 			if count == len(k) - 2:
 				break
-	output = '%.1f' % (total_extra * 9.5367e-7)  # Convert to MiB
-	return int(float(output))  # This is because significant figure accuracy is horrible owing to questionable design decisions
+	output = int(float('%.1f' % (total_extra * 9.5367e-7)))  # Convert to MiB - significant figure accuracy is horrible owing to questionable design decisions
+	if output >= Options.tolerable_extra_cache:
+		return output
+	else:
+		return 0
 
 
 def ping():
@@ -137,14 +146,7 @@ def service_status():
 			else:
 				return (True,)
 
-	""" False if notification has to happen in the OFF state
-	True if notification has to happen in the ON state
-	The 2nd element of the list refers to a preferred sexy name """
-	services = {
-		'ufw': [False, 'Firewall'],
-		'emby-server': [True, 'Emby'],
-		'org.cups.cupsd': [True, None],
-		'sshd': [False, None]}
+	services = Options.check_services
 	special_cases = ['ufw']
 
 	toggled_services = []
@@ -160,7 +162,7 @@ def service_status():
 				service_sexyname = output[0].replace(i + '.service', '').split('-')[1].strip()
 
 			if i in special_cases:
-				_output = special_case(i)
+				_output = special_case(i)  # Output is added to whatever systemctl tells us
 				if _output[0] is False:
 					toggled_services.append(Options.conky_color_yellow + _output[1])
 
@@ -219,9 +221,12 @@ def cpu_top():
 		if myProcess_out[i] in cpu_util.keys():
 			cpu_util[myProcess_out[i]] = round(cpu_util[myProcess_out[i]] + float(myProcess_out[i - 1]))
 		else:
-			cpu_util[myProcess_out[i]] = float(myProcess_out[i - 1])
+			try:
+				cpu_util[myProcess_out[i]] = float(myProcess_out[i - 1])
+			except ValueError:  # I'm not completely sure what's happening here
+				pass
 
-	cpu_util = {k: v for k, v in cpu_util.items() if v > Options.show_cpu_over and k != 'Main'}
+	cpu_util = {k: v for k, v in cpu_util.items() if v > Options.show_cpu_over and k != 'ConkyScript.py'}
 	cpu_util = collections.OrderedDict(sorted(cpu_util.items(), key=lambda x: x[1], reverse=True))
 
 	if cpu_util:
@@ -291,23 +296,28 @@ def main():
 	parser = argparse.ArgumentParser(description='Display stupid stuff in your conky instance. IT\'S THE FUTURE.')
 	parser.add_argument('--pacman', action='store_true', help='Pending pacman updates')
 	parser.add_argument('--pacmancache', action='store_true', help='Pacman redundant cache')
+	parser.add_argument('--services', action='store_true', help='Service status')
 	parser.add_argument('--qbittorrent', action='store_true', help='Qbittorrent status')
 	parser.add_argument('--ping', action='store_true', help='Ping status to specificed server')
 	parser.add_argument('--calendar', nargs=1, help='Calendar functions', metavar='[show / add / seen / parse-ics <file>]')
 	parser.add_argument('--timer', nargs=1, help='Timer functions (set requires an argument)', metavar='[set <time> / reset / get]')
-	parser.add_argument('--services', action='store_true', help='Service status')
 	parser.add_argument('--createchecks', action='store_true', help='Create database entries')
 	parser.add_argument('--top', action='store_true', help='Show processes that exceed specified CPU utilization')
 	parser.add_argument('--showchecks', nargs=1, help='Display database entries created by --createchecks', metavar='[updates / cache]')
 
 	args = parser.parse_args()
 
+	""" The following ARE NOT called directly: """
 	if args.pacman:
 		print(Options.conky_color_yellow + str(pending_updates()))
 
 	elif args.pacmancache:
 		# This is an expensive function; I won't recommend putting it where it's executed continuously
 		print(Options.conky_color_yellow + str(pacman_extra_cache()) + ' MiB')
+
+		""" The following ARE called directly: """
+	elif args.services:
+		print(service_status())
 
 	elif args.qbittorrent:
 		qbittorrent_status = qbittorrent()
@@ -340,9 +350,6 @@ def main():
 			mycalendar.calendar_seen()
 		elif args.calendar[0] == 'parse-ics':
 			mycalendar.parse_ics(args.calendar[1])
-
-	elif args.services:
-		print(service_status())
 
 	elif args.top:
 		cpu_top()
