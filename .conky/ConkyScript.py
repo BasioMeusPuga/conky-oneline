@@ -27,8 +27,7 @@ database = sqlite3.connect(database_path)
 
 
 class Options:
-	conky_color_yellow = '${color3}'
-	conky_color_green = '${color4}'
+	# You need to be here
 	interface_name = 'tplink1'  # Wifi interface name
 	ping_address = '8.8.8.8'
 	tolerable_extra_cache = 300  # MiB
@@ -45,6 +44,12 @@ class Options:
 		'emby-server': [True, 'Emby'],
 		'org.cups.cupsd': [True, None],
 		'sshd': [False, None]}
+
+	# Colors
+	conky_color_white = '${color}'
+	conky_color_gray = '${color2}'
+	conky_color_yellow = '${color3}'
+	conky_color_green = '${color4}'
 
 
 def format_time(time_in_seconds):
@@ -104,10 +109,7 @@ def pacman_extra_cache():
 			if count == len(k) - 2:
 				break
 	output = int(float('%.1f' % (total_extra * 9.5367e-7)))  # Convert to MiB - significant figure accuracy is horrible owing to questionable design decisions
-	if output >= Options.tolerable_extra_cache:
-		return output
-	else:
-		return 0
+	return output
 
 
 def ping():
@@ -244,8 +246,7 @@ class Calendar:
 		any integer interval passed as a string.
 		The following string argument just shows today's events as csv """
 		_today = pyCalendar.calendar_show('BlankForAllIntensivePurposes')
-		if _today:
-			print(_today)
+		return _today
 
 	def calendar_add(self):
 		pyCalendar.calendar_add()
@@ -282,10 +283,16 @@ class Timer:
 		database.commit()
 
 	def get_timer(self):
-		reminder_time = float(database.execute("SELECT Value FROM conky WHERE Name = 'reminder_time'").fetchone()[0])
-		if reminder_time > 0:
-			reminder_time_remaining = reminder_time - time.time()
-			return time.strftime('%H:%M:%S', time.gmtime(reminder_time_remaining))
+		timer_time = float(database.execute("SELECT Value FROM conky WHERE Name = 'reminder_time'").fetchone()[0])
+		if timer_time > 0:
+			time_remaining = timer_time - time.time()
+			if time_remaining > 0:
+				return time.strftime('%H:%M:%S', time.gmtime(time_remaining))
+			else:
+				args_to_subprocess = 'notify-send --urgency=critical -i dialog-information "Timer" "Expired at "' + time.ctime(timer_time)
+				subprocess.run(shlex.split(args_to_subprocess))
+				database.execute("UPDATE conky SET Value = '0' WHERE Name = 'reminder_time'")
+				database.commit()
 
 	def unset_timer(self):
 		database.execute("UPDATE conky SET Value = '0' WHERE Name = 'reminder_time'")
@@ -300,56 +307,23 @@ def main():
 	parser.add_argument('--qbittorrent', action='store_true', help='Qbittorrent status')
 	parser.add_argument('--ping', action='store_true', help='Ping status to specificed server')
 	parser.add_argument('--calendar', nargs=1, help='Calendar functions', metavar='[show / add / seen / parse-ics <file>]')
-	parser.add_argument('--timer', nargs=1, help='Timer functions (set requires an argument)', metavar='[set <time> / reset / get]')
+	parser.add_argument('--timer', nargs='+', help='Timer functions (set requires an argument)', metavar='[set <time> / reset / get]')
 	parser.add_argument('--createchecks', action='store_true', help='Create database entries')
 	parser.add_argument('--top', action='store_true', help='Show processes that exceed specified CPU utilization')
 	parser.add_argument('--showchecks', nargs=1, help='Display database entries created by --createchecks', metavar='[updates / cache]')
+	parser.add_argument('--everything', action='store_true', help='EVERY SINGLE FUNCTION IS RETURNED AT ONCE')
 
 	args = parser.parse_args()
 
-	""" The following ARE NOT called directly: """
+	# Called in --everything _______________________________________________________
 	if args.pacman:
 		print(Options.conky_color_yellow + str(pending_updates()))
 
 	elif args.pacmancache:
-		# This is an expensive function; I won't recommend putting it where it's executed continuously
 		print(Options.conky_color_yellow + str(pacman_extra_cache()) + ' MiB')
 
-		""" The following ARE called directly: """
 	elif args.services:
 		print(service_status())
-
-	elif args.qbittorrent:
-		qbittorrent_status = qbittorrent()
-		if qbittorrent_status == 0:
-			print('idle')
-		elif qbittorrent_status == 1:
-			print('fetching metadata')
-		else:
-			print(str(qbittorrent_status[0]) + ' (' + str(qbittorrent_status[1]) + ') | ' + str(qbittorrent_status[3]) + '% | ' + qbittorrent_status[2])
-
-	elif args.ping:
-		ping_output = ping()
-		if ping_output is None:
-			print('None')
-			return
-		if ping_output[1] > 0:
-			print(Options.conky_color_yellow + ping_output[0] + ' (' + format_time(ping_output[1]) + ')')
-		else:
-			print(ping_output[0])
-
-	elif args.calendar:
-		mycalendar = Calendar()
-		if args.calendar[0] == 'show':
-			mycalendar.calendar_show()
-
-			# All of the following are interactive
-		elif args.calendar[0] == 'add':
-			mycalendar.calendar_add()
-		elif args.calendar[0] == 'seen':
-			mycalendar.calendar_seen()
-		elif args.calendar[0] == 'parse-ics':
-			mycalendar.parse_ics(args.calendar[1])
 
 	elif args.top:
 		cpu_top()
@@ -370,6 +344,39 @@ def main():
 			if output is not None:
 				print(output)
 
+	elif args.calendar:
+		mycalendar = Calendar()
+		if args.calendar[0] == 'show':
+			print(mycalendar.calendar_show())
+
+			# All of the following are interactive
+		elif args.calendar[0] == 'add':
+			mycalendar.calendar_add()
+		elif args.calendar[0] == 'seen':
+			mycalendar.calendar_seen()
+		elif args.calendar[0] == 'parse-ics':
+			mycalendar.parse_ics(args.calendar[1])
+
+		# NOT called in --everything _______________________________________________________
+	elif args.qbittorrent:
+		qbittorrent_status = qbittorrent()
+		if qbittorrent_status == 0:
+			print('idle')
+		elif qbittorrent_status == 1:
+			print('fetching metadata')
+		else:
+			print(str(qbittorrent_status[0]) + ' (' + str(qbittorrent_status[1]) + ') | ' + str(qbittorrent_status[3]) + '% | ' + qbittorrent_status[2])
+
+	elif args.ping:
+		ping_output = ping()
+		if ping_output is None:
+			print('None')
+			return
+		if ping_output[1] > 0:
+			print(Options.conky_color_yellow + ping_output[0] + ' (' + format_time(ping_output[1]) + ')')
+		else:
+			print(ping_output[0])
+
 		""" The following arguments hopefully decrease resource utilization.
 		Instead of calling the relevant functions directly, it's a
 		little better to just write the values to the database every
@@ -385,6 +392,38 @@ def main():
 			print(database.execute("SELECT Value FROM conky WHERE Name = 'updates'").fetchone()[0])
 		elif args.showchecks[0] == 'cache':
 			print(database.execute("SELECT Value FROM conky WHERE Name = 'pacman_extra_cache'").fetchone()[0])
+
+	elif args.everything:
+		""" Everything is called all at once here.
+		Should decrease resource utilization considerably over checking everything in the conkyrc
+		and then executing it twice over if the check succeeds"""
+		final_output = []
+
+		pacman_updates = int(database.execute("SELECT Value FROM conky WHERE Name = 'updates'").fetchone()[0])
+		if pacman_updates > 0:
+			final_output.append(Options.conky_color_gray + ' updates: ' + Options.conky_color_yellow + str(pacman_updates))
+
+		pacman_cache = int(database.execute("SELECT Value FROM conky WHERE Name = 'pacman_extra_cache'").fetchone()[0])
+		if pacman_cache > Options.tolerable_extra_cache:
+			final_output.append(Options.conky_color_gray + ' cache: ' + Options.conky_color_yellow + str(pacman_cache) + ' MiB')
+
+		calendar_today = Calendar().calendar_show()
+		if calendar_today:
+			final_output.append(Options.conky_color_gray + ' today: ' + Options.conky_color_white + calendar_today)
+
+		services = service_status()
+		if services:
+			final_output.append(Options.conky_color_gray + ' services: ' + services)
+
+		mytimer = Timer().get_timer()
+		if mytimer:
+			final_output.append(Options.conky_color_gray + ' timer: ' + Options.conky_color_white + mytimer)
+
+		_cpu_top = cpu_top()
+		if _cpu_top:
+			final_output.append(Options.conky_color_gray + 'cpu: ' + Options.conky_color_yellow + _cpu_top)
+
+		print(''.join(final_output))
 
 	else:
 		exit(1)
