@@ -22,6 +22,9 @@ if not os.path.exists(database_path):
 	database.execute("INSERT INTO conky (Name,Value) VALUES ('reminder_time', '0')")
 	database.execute("INSERT INTO conky (Name,Value) VALUES ('updates', '0')")
 	database.execute("INSERT INTO conky (Name,Value) VALUES ('pacman_extra_cache', '0')")
+	database.execute("INSERT INTO conky (Name,Value) VALUES ('qbittorrent', '0,0')")
+	database.execute("INSERT INTO conky (Name,Value) VALUES ('calendar_iterations', '0')")
+	database.execute("INSERT INTO conky (Name,Value) VALUES ('calendar_event', '0')")
 	database.commit()
 database = sqlite3.connect(database_path)
 
@@ -33,6 +36,8 @@ class Options:
 	tolerable_extra_cache = 300  # MiB
 	show_cpu_over = 50  # Percentage CPU utilization (sum of all cores?)
 	qbittorrent_port = 9390
+	switch_calendar_event_after_iterations = 2  # Switch to next displayed calendar event after being called this many times
+												# Multiply this by the conky update interval to get the event switch duration
 
 	""" 1st element of list:
 	False if notification has to happen in the OFF state
@@ -53,7 +58,10 @@ class Options:
 
 
 def format_time(time_in_seconds):
-	if time_in_seconds >= 3600:
+	if time_in_seconds >= 86400:
+		time_format = '%-dd %-Hh'
+		time_in_seconds = time_in_seconds - 86400  # Huh?
+	elif time_in_seconds >= 3600:
 		time_format = '%-Hh %-Mm'
 	elif time_in_seconds >= 60:
 		time_format = '%-Mm'
@@ -181,6 +189,7 @@ def service_status():
 
 def qbittorrent():
 	try:
+		global_statistics = requests.get('http://localhost:{0}/query/transferInfo'.format(Options.qbittorrent_port)).json()
 		active_torrents = requests.get('http://localhost:{0}/query/torrents?filter=active'.format(Options.qbittorrent_port)).json()
 		all_torrents = requests.get('http://localhost:{0}/query/torrents?filter=downloading'.format(Options.qbittorrent_port)).json()
 		if not active_torrents:
@@ -188,6 +197,22 @@ def qbittorrent():
 	except:
 		return 0
 
+	# Speed statistics
+	def average_speed():
+		""" Much more reliable as a function since this excludes all the
+		error contingent returns """
+		current_download_speed = global_statistics['dl_info_speed']
+		database_speed = database.execute("SELECT Value FROM conky WHERE Name = 'qbittorrent'").fetchone()[0].split(',')
+
+		speed_sum = int(database_speed[0]) + current_download_speed
+		speed_iterations = int(database_speed[1]) + 1
+		database.execute("UPDATE conky SET Value = '{0}' WHERE Name = 'qbittorrent'".format(str(speed_sum) + ',' + str(speed_iterations)))
+		database.commit()
+
+		average = float('%.1f' % (speed_sum / speed_iterations * 9.5367e-4))
+		return average
+
+	# Torrent statistics
 	total_active = len(active_torrents)
 	total_all = len(all_torrents)
 	torrent_statistics = [[i['eta'], i['progress'], i['size']] for i in active_torrents]
@@ -206,7 +231,7 @@ def qbittorrent():
 	except ZeroDivisionError:  # Occurs when metadata is being fetched for just one active torrent
 		return 1
 
-	return total_active, total_all, first_torrent_eta, round(total_progress_percentage, 2)
+	return total_active, total_all, round(total_progress_percentage, 2), first_torrent_eta, average_speed()
 
 
 def cpu_top():
@@ -232,7 +257,7 @@ def cpu_top():
 	cpu_util = collections.OrderedDict(sorted(cpu_util.items(), key=lambda x: x[1], reverse=True))
 
 	if cpu_util:
-		print(', '.join(cpu_util.keys()))
+		return ', '.join(cpu_util.keys())
 	else:
 		return None
 
@@ -243,10 +268,33 @@ class Calendar:
 
 	def calendar_show(self):
 		""" The pyCalendar module displays events in a tabulated manner for
-		any integer interval passed as a string.
-		The following string argument just shows today's events as csv """
+		any integer interval passed as a string. """
 		_today = pyCalendar.calendar_show('BlankForAllIntensivePurposes')
-		return _today
+		number_of_events_today = len(_today)
+
+		if number_of_events_today == 0:
+			return None
+		elif number_of_events_today == 1:
+			return _today[0]
+		else:
+			""" Switch between the events of the day in case there are more than 1 """
+			iterations = int(database.execute("SELECT Value FROM conky WHERE name = 'calendar_iterations'")
+				.fetchone()[0]) + 1  # Because you had the bright idea of zero indexing this
+			event_index = int(database.execute("SELECT Value FROM conky WHERE name = 'calendar_event'").fetchone()[0])
+
+			if iterations < Options.switch_calendar_event_after_iterations:
+				iterations += 1
+			else:
+				iterations = 0
+				event_index += 1
+				if event_index + 1 > number_of_events_today:
+					event_index = 0
+
+			database.execute("UPDATE conky SET Value = {0} WHERE Name = 'calendar_iterations'".format(iterations))
+			database.execute("UPDATE conky SET Value = {0} WHERE Name = 'calendar_event'".format(event_index))
+			database.commit()
+
+			return '{0}. {1}'.format(event_index + 1, _today[event_index])
 
 	def calendar_add(self):
 		pyCalendar.calendar_add()
@@ -360,12 +408,21 @@ def main():
 		# NOT called in --everything _______________________________________________________
 	elif args.qbittorrent:
 		qbittorrent_status = qbittorrent()
+		""" List index:
+		0: Active torrents
+		1: Queued torrents
+		2: First torrent eta
+		3: Total progress percentage """
 		if qbittorrent_status == 0:
 			print('idle')
 		elif qbittorrent_status == 1:
 			print('fetching metadata')
 		else:
-			print(str(qbittorrent_status[0]) + ' (' + str(qbittorrent_status[1]) + ') | ' + str(qbittorrent_status[3]) + '% | ' + qbittorrent_status[2])
+			print(str(qbittorrent_status[0]) +
+				' (' + str(qbittorrent_status[1]) + ') | ' +
+				str(qbittorrent_status[2]) + '% | ' +
+				qbittorrent_status[3] + ' | ' +
+				str(qbittorrent_status[4]) + ' KiB/s')
 
 	elif args.ping:
 		ping_output = ping()
@@ -383,6 +440,13 @@ def main():
 		few minutes and then check that instead """
 
 	elif args.createchecks:
+		""" Zero out collected values for the qbittorent session
+		The createchecks thingy is done only once every 120s though. So it won't work as intended if qbittorrent is restarted before that
+		The actual number is unaffected despite that """
+		qbittorrent_process = subprocess.run('pgrep qbittorrent', shell=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+		if qbittorrent_process.returncode != 0:
+			database.execute("UPDATE conky SET Value = '0,0' WHERE Name = 'qbittorrent'")
+
 		database.execute("UPDATE conky SET Value = {0} WHERE Name = 'updates'".format(pending_updates()))
 		database.execute("UPDATE conky SET Value = {0} WHERE Name = 'pacman_extra_cache'".format(pacman_extra_cache()))
 		database.commit()
@@ -393,6 +457,7 @@ def main():
 		elif args.showchecks[0] == 'cache':
 			print(database.execute("SELECT Value FROM conky WHERE Name = 'pacman_extra_cache'").fetchone()[0])
 
+		# IS everything _______________________________________________________
 	elif args.everything:
 		""" Everything is called all at once here.
 		Should decrease resource utilization considerably over checking everything in the conkyrc
@@ -421,7 +486,7 @@ def main():
 
 		_cpu_top = cpu_top()
 		if _cpu_top:
-			final_output.append(Options.conky_color_gray + 'cpu: ' + Options.conky_color_yellow + _cpu_top)
+			final_output.append(Options.conky_color_gray + ' cpu: ' + Options.conky_color_yellow + _cpu_top)
 
 		print(''.join(final_output))
 

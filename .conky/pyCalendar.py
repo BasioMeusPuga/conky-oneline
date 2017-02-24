@@ -51,7 +51,7 @@ def calendar_show(timeframe):
 		if __name__ == '__main__':
 			print(', '.join(events_to_show))
 		else:
-			return ', '.join(events_to_show)
+			return events_to_show
 
 		""" Display all events in the provided timeframe
 		This shows as a table not really suited for parsing elsewhere """
